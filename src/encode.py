@@ -15,6 +15,7 @@ from utils import get_model, load_data
 
 import numpy as np
 import random
+import shutil
 
 seed = 42 
 torch.manual_seed(seed)
@@ -28,6 +29,10 @@ class TrainingData(Dataset):
     def __init__(self, prompt_ids, tokenizer, max_length=3000):
         self.max_length = max_length
         self.dataset = []
+
+        if tokenizer.pad_token_id is None:
+             tokenizer.pad_token_id = tokenizer.eos_token_id
+
         pad_token_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
         for input_ids in prompt_ids:
             labels = input_ids.copy()
@@ -127,13 +132,38 @@ def main(args):
     if args.with_cot:
         prompt_template.get_fewshot(args.dataset)
 
-    init_adapter_path = os.path.join(
+    cot_name = "cot" if args.with_cot else "direct"
+
+    warmup_weight_path = os.path.join(
+        ROOT_DIR,
+        "warmup",
+        "lora_base_weight",
+        args.model_name,
+        cot_name
+    )
+
+    offline_base_weight_path = os.path.join(
         ROOT_DIR, 
         "offline", 
         args.model_name, 
         f"rank={args.lora_rank}_alpha={args.lora_alpha}",
         "base_weight",
     )
+
+    init_adapter_path = offline_base_weight_path
+
+    #If there are Warmup weights but no Offline weights -> copy/use the Warmup weights
+    if os.path.exists(os.path.join(warmup_weight_path, "adapter_model.safetensors")):
+        print(f"Found WARMUP LoRA weights at: {warmup_weight_path}")
+        if not os.path.exists(os.path.join(offline_base_weight_path, "adapter_model.safetensors")):
+            print(f"Copying Warmup weights to Offline base: {offline_base_weight_path}")
+            os.makedirs(offline_base_weight_path, exist_ok=True)
+            for f in os.listdir(warmup_weight_path):
+                if f.endswith(".json") or f.endswith(".safetensors") or f.endswith(".bin"):
+                    shutil.copy(os.path.join(warmup_weight_path, f), os.path.join(offline_base_weight_path, f))
+    else:
+        print(f"Warning: Warmup weights NOT found at {warmup_weight_path}. Using random init or existing offline weights.")
+
     if not os.path.exists(os.path.join(init_adapter_path, "adapter_model.safetensors")):
         print("No LoRA base weight, creating...")
         peft_config = LoraConfig(
@@ -153,7 +183,8 @@ def main(args):
         time.sleep(2)
         assert os.path.exists(os.path.join(init_adapter_path, "adapter_model.safetensors")) 
 
-    cot_name = "cot" if args.with_cot else "direct"
+    print(f"Using Base Adapter Path: {init_adapter_path}")
+
     for filename, fulldata in data_list:
         filename = filename.split('.')[0] 
         print(f"### Solving {filename} ###")

@@ -11,7 +11,6 @@ from root_dir_path import ROOT_DIR
 from utils import get_model, evaluate, predict, load_data, read_complete
 
 def main(args):
-    data_list = load_data(args.dataset, args.data_type, args.augment_model)
     model, tokenizer, generation_config = get_model(
         args.model_name,
         max_new_tokens = args.max_new_tokens,
@@ -29,90 +28,98 @@ def main(args):
         f"lr={args.learning_rate}_epoch={args.num_train_epochs}_{cot_name}",
         f"aug_model={args.augment_model}",
     )
-    output_root_dir = os.path.join(
-        ROOT_DIR, 
-        "output",
-        args.model_name, 
-        f"rank={args.lora_rank}_alpha={args.lora_alpha}",
-        args.dataset,
-        f"lr={args.learning_rate}_epoch={args.num_train_epochs}_{cot_name}",
-        f"aug_model={args.augment_model}",
-        args.inference_method, 
-    )
-    for filename, fulldata in data_list:
-        filename = filename.split(".")[0]
-        print(f"### Solving {filename} ###")
-        output_dir = os.path.join(output_root_dir, filename)
-        os.makedirs(output_dir, exist_ok=True)
-        with open(os.path.join(output_dir, "config.json"), "w") as fout:
-            json.dump(vars(args), fout, indent=4)
 
-        predict_file = os.path.join(output_dir, "predict.json")
-        ret, start_with = read_complete(predict_file)
+    for setting in args.setting:
+        data_list = load_data(args.dataset, args.data_type, args.augment_model)
 
-        fulldata = fulldata[start_with:] if args.sample == -1 else fulldata[start_with:args.sample]
-        for test_id, data in tqdm(enumerate(fulldata), total=len(fulldata)):
-            test_id = test_id + start_with
-            assert test_id == len(ret), f"test_id {test_id} != len(ret) {len(ret)}"
+        output_root_dir = os.path.join(
+            ROOT_DIR, 
+            "output",
+            args.model_name, 
+            f"rank={args.lora_rank}_alpha={args.lora_alpha}",
+            args.dataset,
+            f"lr={args.learning_rate}_epoch={args.num_train_epochs}_{cot_name}",
+            f"aug_model={args.augment_model}",
+            args.inference_method,
+            f"setting_{setting}" 
+        )
+    
+        for filename, fulldata in data_list:
+            filename = filename.split(".")[0]
+            print(f"### Solving {filename} for setting {setting}###")
+            output_dir = os.path.join(output_root_dir, filename)
+            os.makedirs(output_dir, exist_ok=True)
+            with open(os.path.join(output_dir, "config.json"), "w") as fout:
+                json.dump(vars(args), fout, indent=4)
 
-            question = data["question"]
-            passages = data["passages"]
-            answer = data["answer"]
+            predict_file = os.path.join(output_dir, "predict.json")
+            ret, start_with = read_complete(predict_file)
 
-            def get_pred(model, psgs):
-                text = predict(model, tokenizer, generation_config, 
-                                        question, with_cot=args.with_cot, 
-                                        passages=psgs)
-                pred = {
-                    "test_id": test_id, 
-                    "question": question, 
-                    "answer": answer, 
-                    "text": text,
-                }
-                pred.update(evaluate(text, answer, args.with_cot))
-                return pred
+            fulldata = fulldata[start_with:] if args.sample == -1 else fulldata[start_with:args.sample]
+            for test_id, data in tqdm(enumerate(fulldata), total=len(fulldata)):
+                test_id = test_id + start_with
+                assert test_id == len(ret), f"test_id {test_id} != len(ret) {len(ret)}"
 
-            if args.inference_method == "icl":
-                ret.append(get_pred(model, psgs=passages))
-            else:
-                for pid in range(len(passages)):
-                    adapter_path = os.path.join(load_adapter_path, filename, f"data_{test_id}", f"passage_{pid}")
-                    if pid == 0:
-                        model = PeftModel.from_pretrained(
-                            model, 
-                            adapter_path,
-                            adapter_name = "0", 
-                            is_trainable = False
-                        )
-                    else:
-                        model.load_adapter(adapter_path, adapter_name = str(pid)) 
-                # merge
-                model.add_weighted_adapter(
-                    adapters = [str(i) for i in range(len(passages))], 
-                    weights = [1] * len(passages),
-                    adapter_name = "merge", 
-                    combination_type = "cat",
-                )
-                model.set_adapter("merge")
-                ret.append(get_pred(model, psgs=None if args.inference_method == "prag" else passages))
-                model.delete_adapter("merge")
-                model = model.unload()
-                torch.cuda.empty_cache()
-                gc.collect()
+                question = data["question"]
+                passages = data["passages"]
+                answer = data["answer"]
 
-        with open(predict_file, "w") as fout:
-            json.dump(ret, fout, indent=4)
+                def get_pred(model, psgs):
+                    text = predict(model, tokenizer, generation_config, 
+                                            question, with_cot=args.with_cot, 
+                                            passages=psgs)
+                    pred = {
+                        "test_id": test_id, 
+                        "question": question, 
+                        "answer": answer, 
+                        "text": text,
+                    }
+                    pred.update(evaluate(text, answer, args.with_cot))
+                    return pred
+                
+                if setting == 0:
+                    ret.append(get_pred(model, psgs=None))
+                elif setting == 1 or args.inference_method == "icl":
+                    ret.append(get_pred(model, psgs=passages))
+                else:
+                    for pid in range(len(passages)):
+                        adapter_path = os.path.join(load_adapter_path, filename, f"data_{test_id}", f"passage_{pid}")
+                        if pid == 0:
+                            model = PeftModel.from_pretrained(
+                                model, 
+                                adapter_path,
+                                adapter_name = "0", 
+                                is_trainable = False
+                            )
+                        else:
+                            model.load_adapter(adapter_path, adapter_name = str(pid)) 
+                    # merge
+                    model.add_weighted_adapter(
+                        adapters = [str(i) for i in range(len(passages))], 
+                        weights = [1] * len(passages),
+                        adapter_name = "merge", 
+                        combination_type = "cat",
+                    )
+                    model.set_adapter("merge")
+                    ret.append(get_pred(model, psgs=None if args.inference_method == "prag" else passages))
+                    model.delete_adapter("merge")
+                    model = model.unload()
+                    torch.cuda.empty_cache()
+                    gc.collect()
 
-        ##### Evaluating #####
-        metrics = ["em", "f1", "prec", "recall"]
-        ret_str = ""
-        for met in metrics:
-            acc = sum(float(d[met]) for d in ret) / len(ret)
-            acc = round(acc, 4)
-            ret_str += f"{met}\t{acc}\n"
-        ret_str += "\n" + json.dumps(vars(args), indent=4)
-        with open(os.path.join(output_dir, "result.txt"), "w") as fout:
-            fout.write(ret_str)
+            with open(predict_file, "w") as fout:
+                json.dump(ret, fout, indent=4)
+
+            ##### Evaluating #####
+            metrics = ["em", "f1", "prec", "recall"]
+            ret_str = ""
+            for met in metrics:
+                acc = sum(float(d[met]) for d in ret) / len(ret)
+                acc = round(acc, 4)
+                ret_str += f"{met}\t{acc}\n"
+            ret_str += "\n" + json.dumps(vars(args), indent=4)
+            with open(os.path.join(output_dir, "result.txt"), "w") as fout:
+                fout.write(ret_str)
 
 
 if __name__ == "__main__":
@@ -127,6 +134,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_train_epochs", type=int, required=True)
     parser.add_argument("--learning_rate", type=float, default=3e-4)
     parser.add_argument("--inference_method", type=str, required=True, choices=["icl", "prag", "combine"])
+    parser.add_argument('--setting', type=int, nargs='+', default=[2])
     # LoRA
     parser.add_argument("--lora_rank", type=int)
     parser.add_argument("--lora_alpha", type=int)

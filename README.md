@@ -83,18 +83,20 @@ popd
 cd data
 wget -O elasticsearch-8.15.0.tar.gz https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-8.15.0-linux-x86_64.tar.gz  # download Elasticsearch
 
-# Если нет vpn, качаем Elasticsearch отсюда
+# VPN free link
 wget "https://getfile.dokpub.com/yandex/get/https://disk.yandex.ru/d/A6AYGSHHD6uNTA" -O elasticsearch-8.15.0.tar.gz
 #
 
 tar zxvf elasticsearch-8.15.0.tar.gz
 rm elasticsearch-8.15.0.tar.gz 
 cd elasticsearch-8.15.0
-# Отключите SSL/TLS
+
+# Disable SSL/TLS
 В elasticsearch-8.15.0/config/elasticsearch.yml нужно изменить строчки:
 > xpack.security.enabled: false
 > xpack.security.http.ssl.enabled: false
 #
+
 nohup bin/elasticsearch &  # run Elasticsearch in background
 cd ../..
 python prep_elastic.py --data_path data/dpr/psgs_w100.tsv --index_name wiki  # build index
@@ -119,7 +121,8 @@ Download the [PopQA](https://github.com/AlexTMallen/adaptive-retrieval?tab=readm
 
 ```bash
 mkdir -p data/popqa
-wget -P data/popqa https://github.com/AlexTMallen/adaptive-retrieval/blob/main/data/popQA.tsv
+wget -P data/popqa https://raw.githubusercontent.com/AlexTMallen/adaptive-retrieval/main/data/popQA.tsv
+
 ```
 
 For ComplexWebQuestions:
